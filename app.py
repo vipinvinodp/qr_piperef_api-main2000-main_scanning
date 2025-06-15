@@ -4,7 +4,7 @@ import os
 
 app = Flask(__name__)
 
-# Use environment variable on Render.com for secure DB connection
+# Replace with your PostgreSQL connection URL or set as env variable in Render
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://qrmappinguser:VM0EIqWngW5BZMzNGb7D1ZnHXSYnmPkJ@dpg-d17dqe2dbo4c73fqu71g-a.oregon-postgres.render.com/qr_mapping_db_av1")
 
 def get_connection():
@@ -39,11 +39,10 @@ def update_qr_details():
                     category = %s
                 WHERE title = %s
             """, (data['location'], data['use'], data['category'], data['title']))
-            
             if cur.rowcount == 0:
                 return jsonify({'error': 'Title not found'}), 404
-            
             conn.commit()
+
     return jsonify({'message': 'Details updated successfully'})
 
 @app.route('/edit_qr')
@@ -69,16 +68,22 @@ def edit_qr():
         <textarea id="category" placeholder="Category"></textarea>
         <button onclick="updateDetails()">Update</button>
         <p id="response"></p>
+
         <script>
             function fetchDetails() {
                 const title = document.getElementById('title').value;
+                if (!title) return;
                 fetch(`/get_qr_details?title=${title}`)
                 .then(res => res.json())
                 .then(data => {
-                    if (data.error) return alert(data.error);
-                    document.getElementById('location').value = data.location;
-                    document.getElementById('use').value = data.use;
-                    document.getElementById('category').value = data.category;
+                    if (data.error) {
+                        document.getElementById('response').innerText = data.error;
+                    } else {
+                        document.getElementById('location').value = data.location;
+                        document.getElementById('use').value = data.use;
+                        document.getElementById('category').value = data.category;
+                        document.getElementById('response').innerText = "";
+                    }
                 });
             }
 
@@ -98,10 +103,21 @@ def edit_qr():
                     document.getElementById('response').innerText = data.message || data.error;
                 });
             }
+
+            // Load title from query param and auto-fetch
+            window.onload = function() {
+                const params = new URLSearchParams(window.location.search);
+                const t = params.get("title");
+                if (t) {
+                    document.getElementById("title").value = t;
+                    fetchDetails();
+                }
+            }
         </script>
     </body>
     </html>
     """)
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
