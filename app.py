@@ -1,115 +1,115 @@
-from flask import Flask, request, send_file, jsonify, render_template_string
-import qrcode
-from PIL import Image, ImageDraw, ImageFont
-import io
+from flask import Flask, request, jsonify, render_template_string
 import os
 
 app = Flask(__name__)
 
-def load_qr_data(file_path="qr_mapping_pipe_separated.txt"):
-    qr_data = {}
-    if not os.path.exists(file_path):
-        return qr_data
-    with open(file_path, "r", encoding="utf-8") as f:
-        lines = f.readlines()[1:]
-        for line in lines:
-            parts = line.strip().split("|")
-            if len(parts) == 4:
-                title, location, use, category = parts
-                qr_data[title.upper()] = {
-                    "title": title,
-                    "location": location,
-                    "use": use,
-                    "category": category
-                }
-    return qr_data
+DATA_FILE = 'qr_mapping_pipe_separated.txt'
 
-@app.route("/view/<code>", methods=["GET"])
-def view_code(code):
-    qr_data = load_qr_data()
-    entry = qr_data.get(code.upper())
-    if not entry:
-        return f"<h3>No entry found for {code}</h3>", 404
+@app.route('/get_qr_details')
+def get_qr_details():
+    title = request.args.get('title')
+    if not title:
+        return jsonify({'error': 'Missing title parameter'}), 400
 
-    html_template = '''
+    with open(DATA_FILE, 'r', encoding='utf-8') as file:
+        lines = file.readlines()
+
+    for line in lines[1:]:  # Skip header
+        fields = line.strip().split('|')
+        if fields[0] == title:
+            return jsonify({
+                'title': fields[0],
+                'location': fields[1],
+                'use': fields[2],
+                'category': fields[3]
+            })
+
+    return jsonify({'error': 'Title not found'}), 404
+
+@app.route('/update_qr_details', methods=['POST'])
+def update_qr_details():
+    data = request.json
+    if not all(k in data for k in ('title', 'location', 'use', 'category')):
+        return jsonify({'error': 'Missing one or more required fields'}), 400
+
+    updated = False
+    with open(DATA_FILE, 'r', encoding='utf-8') as file:
+        lines = file.readlines()
+
+    header = lines[0]
+    new_lines = [header]
+    for line in lines[1:]:
+        fields = line.strip().split('|')
+        if fields[0] == data['title']:
+            new_lines.append(f"{fields[0]}|{data['location']}|{data['use']}|{data['category']}\n")
+            updated = True
+        else:
+            new_lines.append(line)
+
+    if not updated:
+        return jsonify({'error': 'Title not found'}), 404
+
+    with open(DATA_FILE, 'w', encoding='utf-8') as file:
+        file.writelines(new_lines)
+
+    return jsonify({'message': 'Details updated successfully'})
+
+@app.route('/edit_qr')
+def edit_qr():
+    return render_template_string("""
     <!DOCTYPE html>
     <html>
     <head>
-        <title>{{ title }}</title>
+        <title>Edit QR Details</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
-            body { font-family: Arial, sans-serif; margin: 40px; }
-            h2 { color: #4CAF50; }
-            .label { font-weight: bold; }
-            .info { margin-top: 15px; }
+            body { font-family: Arial; padding: 20px; }
+            input, textarea { width: 100%; padding: 10px; margin: 5px 0; }
+            button { padding: 10px 20px; }
         </style>
     </head>
     <body>
-        <h2>{{ title }}</h2>
-        <div class="info"><span class="label">Where to keep:</span> {{ location }}</div>
-        <div class="info"><span class="label">Use:</span> {{ use }}</div>
-        <div class="info"><span class="label">Category:</span> {{ category }}</div>
+        <h2>Edit QR Details</h2>
+        <input type="text" id="title" placeholder="Enter title and press Fetch">
+        <button onclick="fetchDetails()">Fetch</button>
+        <textarea id="location" placeholder="Location"></textarea>
+        <textarea id="use" placeholder="Use"></textarea>
+        <textarea id="category" placeholder="Category"></textarea>
+        <button onclick="updateDetails()">Update</button>
+        <p id="response"></p>
+        <script>
+            function fetchDetails() {
+                const title = document.getElementById('title').value;
+                fetch(`/get_qr_details?title=${title}`)
+                .then(res => res.json())
+                .then(data => {
+                    if (data.error) return alert(data.error);
+                    document.getElementById('location').value = data.location;
+                    document.getElementById('use').value = data.use;
+                    document.getElementById('category').value = data.category;
+                });
+            }
+
+            function updateDetails() {
+                const title = document.getElementById('title').value;
+                const location = document.getElementById('location').value;
+                const use = document.getElementById('use').value;
+                const category = document.getElementById('category').value;
+
+                fetch('/update_qr_details', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ title, location, use, category })
+                })
+                .then(res => res.json())
+                .then(data => {
+                    document.getElementById('response').innerText = data.message || data.error;
+                });
+            }
+        </script>
     </body>
     </html>
-    '''
-    return render_template_string(html_template, **entry)
+    """)
 
-@app.route("/generate_sheet", methods=["POST"])
-def generate_sheet():
-    try:
-        data_list = request.get_json().get("data", [])
-        cols, rows = 10, 10
-        qr_size = 150
-        page_width = cols * qr_size
-        page_height = rows * qr_size
-        sheet = Image.new("RGB", (page_width, page_height), "white")
-
-        logo = Image.open("doll1.png")
-        logo_size = 60
-        logo.thumbnail((logo_size, logo_size))
-
-        try:
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
-        except:
-            font = ImageFont.load_default()
-
-        for idx, item in enumerate(data_list[:100]):
-            code = item.get("X1", "AVX")
-            qr_url = f"https://qr-piperef-api-main2000-main-scanning.onrender.com/view/{code}"
-
-            qr = qrcode.QRCode(
-                version=2,
-                error_correction=qrcode.constants.ERROR_CORRECT_H,
-                box_size=2,
-                border=1
-            )
-            qr.add_data(qr_url)
-            qr.make(fit=True)
-            img_qr = qr.make_image(fill_color="black", back_color="white").convert("RGB")
-            img_qr = img_qr.resize((qr_size, qr_size))
-
-            pos = ((qr_size - logo_size) // 2, (qr_size - logo_size) // 2)
-            img_qr.paste(logo, pos, mask=logo if logo.mode == 'RGBA' else None)
-
-            draw = ImageDraw.Draw(img_qr)
-            text = code
-            bbox = draw.textbbox((0, 0), text, font=font)
-            text_width, text_height = bbox[2] - bbox[0], bbox[3] - bbox[1]
-            text_x = (qr_size - text_width) // 2
-            text_y = pos[1] + logo_size - text_height  # bottom align with logo bottom
-            draw.text((text_x, text_y), text, font=font, fill="green")
-
-            x = (idx % cols) * qr_size
-            y = (idx // cols) * qr_size
-            sheet.paste(img_qr, (x, y))
-
-        output = io.BytesIO()
-        sheet.save(output, format="PNG")
-        output.seek(0)
-        return send_file(output, mimetype="image/png")
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+if __name__ == '__main__':
+    app.run(debug=True)
